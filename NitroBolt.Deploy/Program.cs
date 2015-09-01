@@ -1,4 +1,6 @@
 ﻿using Newtonsoft.Json.Linq;
+using NitroBolt.Functional;
+using NitroBolt.QSharp;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
@@ -16,21 +18,53 @@ namespace NitroBolt.Deploy
     //https://{account}.visualstudio.com/_details/security/tokens
     class Program
     {
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
-            var username = ConfigurationManager.AppSettings["username"] ?? "username";
-            var password = ConfigurationManager.AppSettings["password"];
-            var account = ConfigurationManager.AppSettings["account"];
-            var project = ConfigurationManager.AppSettings["project"];
-            var targetPath = ConfigurationManager.AppSettings["target-path"];
-            if (string.IsNullOrEmpty(targetPath))
-                throw new ArgumentNullException("target-path");
-            Console.WriteLine(targetPath);
+            try
+            {
+                var dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 
+                var settings = QSharp.QParser.Parse(System.IO.File.ReadAllText(System.IO.Path.Combine(dir, "settings.qs")));
+                foreach (var deploy in settings.Where(_node => _node.AsString() == "deploy"))
+                {
+                    var login = deploy.P("login", "*").AsString();
+                    var password = deploy.P("password", "*").AsString();
+                    var account = deploy.P("account", "*").AsString();
+                    var project = deploy.P("project", "*").AsString();
+                    var targetPath = deploy.P("target-path", "*").AsString();
+                    var webDeployArchive = deploy.P("web-deploy-package", "*").AsString();
+                    //Console.WriteLine(new[] { login, password, account, project, targetPath }.JoinToString(", "));
+                    Task.Run(() => Deploy(account, project, login ?? "username", password, targetPath, webDeployArchive)).Wait();
+                }
+                return 0;                
+            }
+            catch (Exception exc)
+            {
+                Console.Error.WriteLine(exc.ToDisplayMessage());
+                return 1;
+            }
 
-            Task.Run(() => Deploy(account, project, username, password, targetPath)).Wait();
         }
-        static async Task Deploy(string account, string project, string username, string password, string targetPath)
+
+        private static void DeployByAppConfig()
+        {
+            if (true)
+            {
+                var username = ConfigurationManager.AppSettings["username"] ?? "username";
+                var password = ConfigurationManager.AppSettings["password"];
+                var account = ConfigurationManager.AppSettings["account"];
+                var project = ConfigurationManager.AppSettings["project"];
+                var targetPath = ConfigurationManager.AppSettings["target-path"];
+                if (string.IsNullOrEmpty(targetPath))
+                    throw new ArgumentNullException("target-path");
+                Console.WriteLine(targetPath);
+
+
+                Task.Run(() => Deploy(account, project, username, password, targetPath)).Wait();
+            }
+        }
+
+        static async Task Deploy(string account, string project, string username, string password, string targetPath, string webDeployArchive = null)
         {
             using (var client = new HttpClient())
             {
@@ -53,7 +87,22 @@ namespace NitroBolt.Deploy
                 Console.WriteLine(zipfile.Length);
                 using (var archive = new ZipArchive(new MemoryStream(zipfile)))
                 {
-                    ExtractTo(archive, targetPath, from:"drop/");
+                    if (webDeployArchive != null)
+                    {
+                        var manifest = System.Xml.Linq.XElement.Load(archive.GetEntry($"drop/{webDeployArchive}.SourceManifest.xml").Open());
+                        var path = manifest.Element("IisApp")?.Attribute("path")?.Value;
+                        Console.WriteLine(path);
+                        var archivePath = $"Content/{path.Replace("C:", "C_C").Replace('\\', '/')}/";
+                        //Console.WriteLine(archivePath);
+                        using (var packageArchive = new ZipArchive(archive.GetEntry($"drop/{webDeployArchive}.zip").Open()))
+                        {
+                            ExtractTo(packageArchive, targetPath, from: archivePath);
+                        }
+                    }
+                    else
+                    {
+                        ExtractTo(archive, targetPath, from: "drop/");
+                    }
                 }
 
             }
@@ -89,6 +138,21 @@ namespace NitroBolt.Deploy
             if (path.StartsWith(prefix))
                 return path.Substring(prefix.Length);
             return null;
+        }
+    }
+    public static class ZipArchiveHelper
+    {
+        public static byte[] ReadAllBytes(this ZipArchiveEntry entry)
+        {
+            if (entry == null)
+                return null;
+            using (var stream = entry.Open())
+            {
+                var result = new byte[entry.Length];
+                if (stream.Read(result, 0, result.Length) == result.Length)
+                    return result;
+                throw new Exception($"Invalid length: '{entry.Name}'");
+            }
         }
     }
 }
