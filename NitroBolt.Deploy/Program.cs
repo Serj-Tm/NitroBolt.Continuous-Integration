@@ -22,21 +22,23 @@ namespace NitroBolt.Deploy
         {
             try
             {
-                var dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-
-                var settings = QSharp.QParser.Parse(System.IO.File.ReadAllText(System.IO.Path.Combine(dir, "settings.qs")));
-                foreach (var deploy in settings.Where(_node => _node.AsString() == "deploy"))
+                if (args.FirstOrDefault() == "--long-running")
                 {
-                    var login = deploy.P("login", "*").AsString();
-                    var password = deploy.P("password", "*").AsString();
-                    var account = deploy.P("account", "*").AsString();
-                    var project = deploy.P("project", "*").AsString();
-                    var targetPath = deploy.P("target-path", "*").AsString();
-                    var webDeployArchive = deploy.P("web-deploy-package", "*").AsString();
-                    //Console.WriteLine(new[] { login, password, account, project, targetPath }.JoinToString(", "));
-                    Task.Run(() => Deploy(account, project, login ?? "username", password, targetPath, webDeployArchive)).Wait();
+                    for (;;)
+                    {
+                        try
+                        {
+                            DeployAll();
+                        }
+                        catch (Exception exc)
+                        {
+                            Console.Error.WriteLine(exc.ToDisplayMessage());
+                        }
+                        System.Threading.Thread.Sleep(TimeSpan.FromMinutes(30));
+                    }
                 }
-                return 0;                
+                DeployAll();
+                return 0;
             }
             catch (Exception exc)
             {
@@ -44,6 +46,24 @@ namespace NitroBolt.Deploy
                 return 1;
             }
 
+        }
+
+        private static void DeployAll()
+        {
+            var dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+            var settings = QSharp.QParser.Parse(System.IO.File.ReadAllText(System.IO.Path.Combine(dir, "settings.qs")));
+            foreach (var deploy in settings.Where(_node => _node.AsString() == "deploy"))
+            {
+                var login = deploy.P("login", "*").AsString();
+                var password = deploy.P("password", "*").AsString();
+                var account = deploy.P("account", "*").AsString();
+                var project = deploy.P("project", "*").AsString();
+                var targetPath = deploy.P("target-path", "*").AsString();
+                var webDeployArchive = deploy.P("web-deploy-package", "*").AsString();
+                //Console.WriteLine(new[] { login, password, account, project, targetPath }.JoinToString(", "));
+                Task.Run(() => Deploy(account, project, login ?? "username", password, targetPath, webDeployArchive)).Wait();
+            }
         }
 
         private static void DeployByAppConfig()
