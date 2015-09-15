@@ -61,8 +61,16 @@ namespace NitroBolt.Deploy
                 var project = deploy.P("project", "*").AsString();
                 var targetPath = deploy.P("target-path", "*").AsString();
                 var webDeployArchive = deploy.P("web-deploy-package", "*").AsString();
-                //Console.WriteLine(new[] { login, password, account, project, targetPath }.JoinToString(", "));
-                Task.Run(() => Deploy(account, project, login ?? "username", password, targetPath, webDeployArchive)).Wait();
+                try
+                {
+                    //Console.WriteLine(new[] { login, password, account, project, targetPath }.JoinToString(", "));
+                    Task.Run(() => Deploy(account, project, login ?? "username", password, targetPath, webDeployArchive)).Wait();
+                }
+                catch (Exception exc)
+                {
+                    Console.Error.WriteLine($"{project}: {exc.ToDisplayMessage()}");
+                    Log(exc);
+                }
             }
         }
 
@@ -94,13 +102,26 @@ namespace NitroBolt.Deploy
                     .Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(ASCIIEncoding.ASCII.GetBytes($"{username}:{password}")));
 
                 var buildsResponse = await client.GetStringAsync($"https://{account}.visualstudio.com/DefaultCollection/{project}/_apis/build/builds?api-version=2.0&statusFilter=completed&$top=1");
-                var buildid = JObject.Parse(buildsResponse)["value"][0]["id"];
+                var jBuildsResponse = JObject.Parse(buildsResponse);
+                Log(jBuildsResponse);
+                if (jBuildsResponse["value"].Count() == 0)
+                    throw new Exception("No builds");
+                var jBuild = jBuildsResponse["value"][0];
+                var buildid = jBuild["id"];
+
+                if (jBuild["status"]?.ToString() != "completed")
+                    throw new Exception($"Build not completed: {jBuild["status"]}");
+                if (jBuild["result"]?.ToString() != "succeeded")
+                    throw new Exception($"Build failed: {jBuild["result"]}");
+
 
                 var responseBody = await client.GetStringAsync($"https://{account}.visualstudio.com/DefaultCollection/{project}/_apis/build/builds/{buildid}/artifacts?api-version=2.0");
+                var jResponseBody = JObject.Parse(responseBody);
+                Log(jResponseBody);
 
                 //Console.WriteLine(responseBody);
                 //Console.WriteLine(JObject.Parse(responseBody));
-                var downloadUrl = JObject.Parse(responseBody)["value"][0]["resource"]["downloadUrl"]?.ToString();
+                var downloadUrl = jResponseBody["value"][0]["resource"]["downloadUrl"]?.ToString();
                 Console.WriteLine(downloadUrl);
 
                 var zipfile = await client.GetByteArrayAsync(downloadUrl);
@@ -110,6 +131,7 @@ namespace NitroBolt.Deploy
                     if (webDeployArchive != null)
                     {
                         var manifest = System.Xml.Linq.XElement.Load(archive.GetEntry($"drop/{webDeployArchive}.SourceManifest.xml").Open());
+                        Log(manifest);
                         var path = manifest.Element("IisApp")?.Attribute("path")?.Value;
                         Console.WriteLine(path);
                         var archivePath = $"Content/{path.Replace("C:", "C_C").Replace('\\', '/')}/";
@@ -158,6 +180,10 @@ namespace NitroBolt.Deploy
             if (path.StartsWith(prefix))
                 return path.Substring(prefix.Length);
             return null;
+        }
+        static void Log(object data)
+        {
+            System.IO.File.AppendAllText(ApplicationHelper.MapPath("log.txt"), data?.ToString());
         }
     }
     public static class ZipArchiveHelper
